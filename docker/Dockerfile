@@ -63,6 +63,7 @@ FROM base-image-platform-${PLATFORM} AS base-image-embodied-embodichain
 FROM base-image-platform-${PLATFORM} AS base-image-embodied-roboverse
 FROM base-image-platform-${PLATFORM} AS base-image-embodied-polaris
 FROM base-image-platform-${PLATFORM} AS base-image-embodied-genesis
+FROM base-image-platform-${PLATFORM} AS base-image-embodied-openpi-realworld
 
 
 # Franka depends on ros-noetic (Ubuntu 20.04) and is GPU-agnostic, so it
@@ -176,11 +177,11 @@ FROM base-image AS reason-image
 # (nvidia-cutlass-dsl, flashinfer, tilelang, tokenspeed-mla) to different
 # versions, so sharing a venv means whichever is installed second downgrades the
 # other's kernels. Activate `reason-vllm` for vLLM rollout.
-RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} agentic --venv reason --engine sglang && \
-    bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} agentic --venv reason-vllm --engine vllm
+# RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} agentic --venv reason --engine sglang && \
+#     bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} agentic --venv reason-vllm --engine vllm
 
 # Set default env
-RUN echo "source ${UV_PATH}/reason/bin/activate" >> ~/.bashrc
+# RUN echo "source ${UV_PATH}/reason/bin/activate" >> ~/.bashrc
 
 
 ##################################################################################################
@@ -222,6 +223,29 @@ RUN chmod +x /usr/local/bin/link_assets
 RUN cp $UV_PATH/requirements/embodied/download_assets.sh /usr/local/bin/download_assets
 RUN chmod +x /usr/local/bin/download_assets
 
+##################################################################################################
+# Embodied: OpenPI RealWorld
+##################################################################################################
+
+FROM embodied-common-image AS embodied-openpi-realworld-image
+
+RUN bash requirements/install.sh \
+    ${INSTALL_MIRROR_OPTION} \
+    --platform ${RLINF_PLATFORM} \
+    embodied \
+    --venv openpi \
+    --model openpi \
+    --env realworld
+
+# 单独一个 layer 下载 tokenizer
+RUN source switch_env openpi && \
+    download_assets ${INSTALL_MIRROR_OPTION} \
+    --dir /opt/assets \
+    --assets openpi
+
+RUN link_assets
+
+RUN echo "source ${UV_PATH}/openpi/bin/activate" >> ~/.bashrc
 
 ##################################################################################################
 # Embodied: ManiSkill / Libero
@@ -229,32 +253,32 @@ RUN chmod +x /usr/local/bin/download_assets
 FROM embodied-common-image AS embodied-maniskill_libero-image
 
 # Install openvla env
-RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv openvla --model openvla --env maniskill_libero && \
-    bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv openvla-oft --model openvla-oft --env maniskill_libero && \
-    bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv openpi --model openpi --env maniskill_libero && \
-    bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv gr00t --model gr00t --env maniskill_libero && \
-    bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv gr00t_n1d6 --model gr00t_n1d6 --env maniskill_libero && \
-    bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv gr00t_n1d7 --model gr00t_n1d7 --env maniskill_libero && \
-    bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv dexbotic --model dexbotic --env maniskill_libero && \
-    bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv starvla --model starvla --env maniskill_libero && \
-    bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv abot_m0 --model abot_m0 --env maniskill_libero
+# RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv openvla --model openvla --env maniskill_libero
+# RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv openvla-oft --model openvla-oft --env maniskill_libero
+RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv openpi --model openpi --env maniskill_libero
+# RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv gr00t --model gr00t --env maniskill_libero
+# RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv gr00t_n1d6 --model gr00t_n1d6 --env maniskill_libero
+# RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv gr00t_n1d7 --model gr00t_n1d7 --env maniskill_libero
+# RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv dexbotic --model dexbotic --env maniskill_libero
+# RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv starvla --model starvla --env maniskill_libero
+# RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv abot_m0 --model abot_m0 --env maniskill_libero
 
-RUN source switch_env openvla && download_assets ${INSTALL_MIRROR_OPTION} --dir /opt/assets --assets maniskill,openpi
+RUN source switch_env openpi && download_assets ${INSTALL_MIRROR_OPTION} --dir /opt/assets --assets openpi
 RUN link_assets
 
 # Set default env
-RUN echo "source ${UV_PATH}/openvla/bin/activate" >> ~/.bashrc
+RUN echo "source ${UV_PATH}/openpi/bin/activate" >> ~/.bashrc
 
 FROM embodied-common-image AS embodied-behavior-openvlaoft-image
 
 # Install openvla-oft env
-RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv openvla-oft --model openvla-oft --env behavior
+# RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv openvla-oft --model openvla-oft --env behavior
 
 # omnigibson downloads assets to /tmp during initialization
-RUN source switch_env openvla-oft && python -c "import omnigibson as og; cfg={}; og.Environment(cfg); og.shutdown()" || exit 0
+# RUN source switch_env openvla-oft && python -c "import omnigibson as og; cfg={}; og.Environment(cfg); og.shutdown()" || exit 0
 
 # Set default env
-RUN echo "source ${UV_PATH}/openvla-oft/bin/activate" >> ~/.bashrc
+# RUN echo "source ${UV_PATH}/openvla-oft/bin/activate" >> ~/.bashrc
 
 FROM embodied-common-image AS embodied-behavior-openpi-image
 
@@ -276,8 +300,8 @@ RUN echo "source ${UV_PATH}/openpi/bin/activate" >> ~/.bashrc
 FROM embodied-common-image AS embodied-metaworld-image
 
 # Install openvla-oft and openpi envs
-RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv openvla-oft --model openvla-oft --env metaworld && \
-    bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv openpi --model openpi --env metaworld
+# RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv openvla-oft --model openvla-oft --env metaworld
+RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv openpi --model openpi --env metaworld
 
 RUN source switch_env openpi && download_assets ${INSTALL_MIRROR_OPTION} --dir /opt/assets --assets openpi
 RUN link_assets
@@ -295,8 +319,8 @@ FROM embodied-common-image AS embodied-calvin-image
 ENV CALVIN_PATH=/opt/envs/calvin
 
 # Install openvla-oft and openpi envs
-RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv openvla-oft --model openvla-oft --env calvin && \
-    bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv openpi --model openpi --env calvin
+# RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv openvla-oft --model openvla-oft --env calvin
+RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv openpi --model openpi --env calvin
 
 RUN source switch_env openpi && download_assets ${INSTALL_MIRROR_OPTION} --dir /opt/assets --assets openpi
 RUN link_assets
@@ -343,11 +367,11 @@ FROM embodied-common-image AS embodied-isaaclab-image
 ENV ISAAC_LAB_PATH=/opt/envs/isaaclab
 
 # Install gr00t env, and openpi env
-RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv gr00t --model gr00t --env isaaclab && \
-    bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv openpi --model openpi --env isaaclab
+# RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv gr00t --model gr00t --env isaaclab
+RUN bash requirements/install.sh ${INSTALL_MIRROR_OPTION} --platform ${RLINF_PLATFORM} embodied --venv openpi --model openpi --env isaaclab
 
 # Set default env
-RUN echo "source ${UV_PATH}/gr00t/bin/activate" >> ~/.bashrc
+RUN echo "source ${UV_PATH}/openpi/bin/activate" >> ~/.bashrc
 
 
 ##################################################################################################
@@ -527,3 +551,31 @@ RUN rm -rf /var/lib/apt/lists/*
 WORKDIR /workspace
 
 CMD ["/bin/bash"]
+
+
+# BEGIN CODEX CLI
+USER root
+
+# Install the executable package outside /root/.codex.
+# /root/.codex will be reserved for persistent runtime state.
+RUN curl -fL \
+        --retry 5 \
+        --retry-delay 2 \
+        --retry-all-errors \
+        # https://raw.githubusercontent.com/openai/codex/main/scripts/install/install.sh \
+        https://chatgpt.com/codex/install.sh \
+        -o /tmp/install-codex.sh && \
+    CODEX_NON_INTERACTIVE=1 \
+    CODEX_INSTALL_DIR=/usr/local/bin \
+    CODEX_HOME=/opt/codex \
+    # CODEX_INSTALLER_USE_RELEASES_OPENAI_COM=false \
+        sh /tmp/install-codex.sh && \
+    rm -f /tmp/install-codex.sh && \
+    /usr/local/bin/codex --version
+
+# END CODEX CLI
+
+# Install bubblewrap for sandboxing (used by Codex CLI)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends bubblewrap && \
+    rm -rf /var/lib/apt/lists/*

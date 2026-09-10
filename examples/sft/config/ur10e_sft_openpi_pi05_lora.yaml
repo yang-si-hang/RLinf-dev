@@ -1,0 +1,107 @@
+defaults:
+  - model/pi0_5_ur_lora@actor.model
+  - hybrid_engines/fsdp@actor.fsdp_config
+  - override hydra/job_logging: stdout
+  - _self_
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:EMBODIED_PATH}/config/
+
+# Prepare the data and normalization statistics before launching:
+#   export HF_LEROBOT_HOME=/app/data/lerobot_data
+#   export PI05_BASE_CKPT=/path/to/pi05_base_torch
+#   python toolkits/lerobot/calculate_norm_stats.py \
+#       --config-name pi05_ur_lora_finetune \
+#       --repo-id pick_v4_merge_crop_vid
+# The resulting norm stats must be available under PI05_BASE_CKPT using the
+# same repo id, or actor.model.openpi_data.norm_stats_path must point to them.
+# PI05_BASE_CKPT must be a converted PyTorch checkpoint. The TrainConfig
+# weight_loader gs:// path is used only by native JAX OpenPI training.
+#
+# LoRA note: RLinf's model_type=openpi PEFT path currently applies rank-16 LoRA
+# to PaliGemma and leaves the action expert fully trainable. It does not exactly
+# reproduce native OpenPI's gemma_2b_lora + gemma_300m_lora dual-LoRA setup.
+
+# export PYTHONPATH=/app
+# export EMBODIED_PATH=/app/examples/embodiment
+# export HF_LEROBOT_HOME=/app/data/lerobot_data
+# export PI05_BASE_CKPT=/path/to/pi05_base_torch
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    actor: 0-0
+
+runner:
+  task_type: sft
+  logger:
+    log_path: "../results"
+    project_name: rlinf
+    experiment_name: "pi05_ur10e_lora_finetune"
+    logger_backends: ["tensorboard"]
+
+  max_epochs: -1
+  max_steps: 30000
+  val_check_interval: -1
+  # Save every 1,000 steps. Keep the newest checkpoint plus permanent
+  # milestones at 5,000-step intervals; delete other superseded checkpoints.
+  save_interval: 1000
+  keep_period: 5000
+  # SFTRunner emits metrics every step. TrainConfig.log_interval=200 applies
+  # only when this dataconfig is used by native OpenPI training.
+
+data:
+  # Resolved relative to HF_LEROBOT_HOME. A full local dataset path is also
+  # accepted. Keep this id consistent with the norm-stats asset id.
+  train_data_paths: "pick_v4_merge_crop_vid"
+
+actor:
+  group_name: "ActorGroup"
+  training_backend: "fsdp"
+  micro_batch_size: 64    # single GPU cal grad batch
+  global_batch_size: 64   # optimize batch
+  seed: 0
+
+  model:
+    model_path: ${oc.env:PI05_BASE_CKPT}
+    openpi_data:
+      repo_id: "pick_v4_merge_crop_vid"
+      # Set this when norm stats are not stored below PI05_BASE_CKPT.
+      norm_stats_path: # TODO
+
+  optim:
+    lr: 2.5e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-8
+    weight_decay: 1.0e-10
+    clip_grad: 1.0
+    total_training_steps: ${runner.max_steps}
+    lr_warmup_steps: 1000
+    # Matches OpenPI CosineDecaySchedule: warm up to peak_lr, then decay to
+    # min_lr without starting exactly at zero.
+    lr_scheduler: "openpi_cosine"
+    num_cycles: 0.5
+    min_lr: 2.5e-6
+
+  fsdp_config:
+    strategy: "fsdp"
+    sharding_strategy: "no_shard"
+    # LoRA mixes frozen and trainable parameters in the same model.
+    use_orig_params: true
+    # OpenPI does not currently support FSDP gradient checkpointing.
+    gradient_checkpointing: false
+    mixed_precision:
+      param_dtype: ${actor.model.precision}
+      reduce_dtype: ${actor.model.precision}
+      buffer_dtype: ${actor.model.precision}
+
+reward:
+  use_reward_model: false
+
+critic:
+  use_critic_model: false

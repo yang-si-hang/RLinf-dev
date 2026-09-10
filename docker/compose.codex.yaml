@@ -1,0 +1,4 @@
+services:
+  rlinf:
+    volumes:
+      - ${HOME}/.codex:/root/.codex

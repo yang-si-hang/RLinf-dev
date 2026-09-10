@@ -14,9 +14,10 @@
 
 """Unified OpenPI 0.5 checkpoint convertor.
 
-Dispatches to five modes over a shared core:
+Dispatches to six modes over a shared core:
 
     jax_to_openpi_rlinf              JAX Pi0/Pi05 checkpoint -> OpenPI_RLinf layout
+    jax_lora_to_openpi_rlinf         JAX Pi0/Pi05 LoRA -> merged OpenPI_RLinf
     openpi_pytorch_to_openpi_rlinf   OpenPI PyTorch layout -> OpenPI_RLinf layout
     sft_to_openpi_rlinf              RLinf SFT full_weights.pt -> OpenPI_RLinf
                                    layout selected by ``--config-name`` and ``--dtype``
@@ -39,6 +40,7 @@ from __future__ import annotations
 import argparse
 
 from rlinf.utils.ckpt_convertor.openpi import (
+    jax_lora_to_openpi_rlinf,
     jax_to_openpi_rlinf,
     openpi_pytorch_to_openpi_rlinf,
     openpi_rlinf_to_openpi_pytorch,
@@ -50,6 +52,7 @@ from rlinf.utils.ckpt_convertor.openpi import (
 # kernels retain the original terminology: old = OpenPI PyTorch, new =
 # OpenPI_RLinf.
 _MODES = {
+    "jax_lora_to_openpi_rlinf": jax_lora_to_openpi_rlinf,
     "jax_to_openpi_rlinf": jax_to_openpi_rlinf,
     "openpi_pytorch_to_openpi_rlinf": openpi_pytorch_to_openpi_rlinf,
     "sft_to_openpi_rlinf": pt_to_safetensors,

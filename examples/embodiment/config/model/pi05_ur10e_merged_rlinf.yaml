@@ -1,0 +1,40 @@
+# Merged JAX LoRA checkpoint for UR10e inference with openpi_rlinf.
+model_type: "openpi_rlinf"
+model_path: "data/openpi-rlinf-checkpoints/pi05_ur10e_lora_train_time_rtc/25000"  # Override with the jax_lora_to_openpi_rlinf output directory.
+precision: bf16
+
+# LoRA has already been folded into the full weights by the converter.
+is_lora: false
+lora_rank: 32
+pi05: true
+
+# UR exposes 10 physical action values; Pi0.5 pads them to 32 internally.
+# RLinf sends all 20 predicted actions. The external Device Server decides how
+# many actions to consume before returning the next observation.
+num_action_chunks: 20
+action_dim: 10
+use_proprio: true
+num_steps: 10    # denoise steps, same as openpi
+add_value_head: false
+
+# Keep norm stats from the same training checkpoint. An explicit path avoids
+# relying on checkpoint-layout inference in the transform builder.
+openpi_data:
+  repo_id: "pick_v4_merge_crop_vid"
+  norm_stats_path: ${..model_path}/assets/pick_v4_merge_crop_vid/norm_stats.json
+
+openpi:
+  task: eval    # inference mode
+  config_name: "pi05_ur10e_lora_finetune"
+  num_images_in_input: 2
+  action_chunk: ${..num_action_chunks}
+  action_env_dim: ${..action_dim}
+  num_steps: ${..num_steps}
+  model_action_dim: 32
+  model_action_horizon: 20
+  # The adapter tensors no longer exist after merging. Using *_lora variants
+  # would construct a different state dict and fail strict checkpoint loading.
+  paligemma_variant: "gemma_2b"
+  action_expert_variant: "gemma_300m"
+  max_token_len: 200
+  discrete_state_input: true

@@ -9,7 +9,7 @@ wrapper/FSDP prefix strip, and the single `copy_norm_stats` helper.
 Unified entry point:
 
 ```bash
-python -m rlinf.utils.ckpt_convertor.openpi.convert --mode {jax_to_openpi_rlinf,openpi_pytorch_to_openpi_rlinf,sft_to_openpi_rlinf,openpi_rlinf_to_openpi_pytorch,sft2deploy} ...
+python -m rlinf.utils.ckpt_convertor.openpi.convert --mode {jax_to_openpi_rlinf,jax_lora_to_openpi_rlinf,openpi_pytorch_to_openpi_rlinf,sft_to_openpi_rlinf,openpi_rlinf_to_openpi_pytorch,sft2deploy} ...
 ```
 
 Two named checkpoint layouts are referenced throughout:
@@ -50,6 +50,36 @@ python -m rlinf.utils.ckpt_convertor.openpi.convert --mode jax_to_openpi_rlinf \
 
 Optional shape flags: `--no-pi05`, `--action-dim`, `--action-horizon`,
 `--max-token-len`, `--paligemma-variant`, `--action-expert-variant`.
+
+## `jax_lora_to_openpi_rlinf`
+
+JAX Pi0/Pi0.5 dual-expert LoRA checkpoint -> merged, non-LoRA OpenPI_RLinf
+layout. Attention adapters are merged with `alpha / rank`; FFN adapters follow
+the upstream OpenPI implementation and are merged as the unscaled `A @ B`.
+Unknown or incomplete adapters cause conversion to fail instead of being
+silently omitted. The output uses the base `gemma_2b` and `gemma_300m`
+variants.
+
+For the UR10e Pi0.5 checkpoint in this repository:
+
+```bash
+python -m rlinf.utils.ckpt_convertor.openpi.convert \
+    --mode jax_lora_to_openpi_rlinf \
+    --input-model data/openpi-checkpoints/pi05_ur10e_lora_train_time_rtc/25000 \
+    --input-norm-stats data/openpi-checkpoints/pi05_ur10e_lora_train_time_rtc/25000/assets/pick_v4_merge_crop_vid/norm_stats.json \
+    --output-model data/openpi-checkpoints/pi05_ur10e_merged_openpi_rlinf \
+    --output-norm-stats data/openpi-checkpoints/pi05_ur10e_merged_openpi_rlinf/assets/pick_v4_merge_crop_vid/norm_stats.json \
+    --action-dim 32 \
+    --action-horizon 20 \
+    --max-token-len 200
+```
+
+Load the result for inference with the
+`examples/embodiment/config/model/pi0_5_ur_merged_rlinf.yaml` model defaults.
+Override its `model_path` with the output directory above. The inference input
+must follow `URInputs`: `observation.images.base_0_rgb`,
+`observation.images.left_wrist_0_rgb`, a 10-value `observation.state`, and a
+text `prompt`. The output transform returns 10-value absolute TCP actions.
 
 ---
 

@@ -1,0 +1,38 @@
+# docker compose \
+#   -f docker-compose.yaml \
+#   -f docker-compose.proxy.yaml \
+#   -f docker-compose.dev.yaml \
+#   up -d --build
+
+services:
+  rlinf:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      network: host
+      args:
+        BUILD_TARGET: embodied-openpi-realworld
+        PLATFORM: nvidia
+        NO_MIRROR: "1"
+
+    image: rlinf-openpi-realworld:latest
+    container_name: rlinf
+
+    gpus: all
+    network_mode: host
+    ipc: host
+    shm_size: "100gb"
+
+    stdin_open: true
+    tty: true
+
+    working_dir: /app
+
+    volumes:
+      - ..:/app
+      - ../../openpi-rlinf:/opt/openpi-lerobot   # mount user's local openpi
+      
+      # OpenPI assets and checkpoints.
+      - ${OPENPI_DATA_HOME:-~/.cache/openpi}:/openpi_assets
+
+    command: sleep infinity
