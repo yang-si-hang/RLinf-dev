@@ -165,6 +165,22 @@ class OpenPiPytorchEvalActionModel(OpenPiPytorchActionModel):
             processed_obs["observation/state_gripper"] = env_states[:, 6:7]
         else:
             processed_obs["observation/state"] = env_states
+        if "pi05_ur" in self.config_name:
+            extra_view_images = env_obs.get("extra_view_images")
+            if extra_view_images is None or extra_view_images.shape[1] != 1:
+                raise ValueError(
+                    "UR OpenPI inference requires exactly one extra wrist camera view."
+                )
+            processed_obs["observation.images.base_0_rgb"] = processed_obs.pop(
+                "observation/image"
+            )
+            processed_obs["observation.images.left_wrist_0_rgb"] = extra_view_images[
+                :, 0
+            ]
+            # The upstream UR policy uses LeRobot's dotted observation keys,
+            # unlike the slash-separated keys used by the other adapters.
+            processed_obs["observation.state"] = processed_obs.pop("observation/state")
+            return processed_obs
         wrist_images = env_obs.get("wrist_images")
         if wrist_images is not None:
             processed_obs["observation/wrist_image"] = wrist_images

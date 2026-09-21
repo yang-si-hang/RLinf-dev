@@ -24,6 +24,7 @@ from .hardware import (
     GimArmHWInfo,
     HardwareInfo,
     Turtle2HWInfo,
+    UR10eHWInfo,
 )
 from .manager import Tracer, WorkerInfo
 from .placement import (
@@ -58,6 +59,7 @@ __all__ = [
     "FrankaHWInfo",
     "GimArmHWInfo",
     "Turtle2HWInfo",
+    "UR10eHWInfo",
     "CollectiveGroupOptions",
     "Cluster",
     "ClusterConfig",

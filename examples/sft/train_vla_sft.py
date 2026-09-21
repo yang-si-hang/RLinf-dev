@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+bash examples/sft/run_vla_sft.sh \
+    ur10e_rlt_stage1_sft_openpi_pi05
+"""
+
 import json
 import logging
 

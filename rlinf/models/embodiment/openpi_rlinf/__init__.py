@@ -29,6 +29,25 @@ from rlinf.utils.logging import get_logger
 logger = get_logger()
 
 
+def _resolve_action_horizon(cfg: Any, model_cfg: Any) -> int:
+    """Return the full model/action-chunk horizon used inside RLinf."""
+    from omegaconf import OmegaConf
+
+    configured_horizon = int(cfg.num_action_chunks)
+    prediction_horizon = int(
+        OmegaConf.select(model_cfg, "model_action_horizon", default=configured_horizon)
+    )
+    if configured_horizon <= 0 or prediction_horizon <= 0:
+        raise ValueError("Model action horizon must be positive.")
+    if configured_horizon != prediction_horizon:
+        raise ValueError(
+            "actor.model.num_action_chunks must equal "
+            "actor.model.openpi.model_action_horizon. RLinf sends the complete "
+            "prediction chunk; the external service owns its execution horizon."
+        )
+    return prediction_horizon
+
+
 def get_model(cfg: Any, torch_dtype: Any = None) -> Any:
     """Build an OpenPI PyTorch Pi0/Pi0.5 model from ``actor.model`` config.
 
@@ -70,9 +89,11 @@ def get_model(cfg: Any, torch_dtype: Any = None) -> Any:
             f"{[str(model_path / rel) for rel in FULL_WEIGHTS_CANDIDATES]}."
         )
 
+    model_action_horizon = _resolve_action_horizon(cfg, model_cfg)
+
     pi0_kwargs = {
         "pi05": pi05,
-        "action_horizon": int(cfg.num_action_chunks),
+        "action_horizon": model_action_horizon,
         "action_dim": int(model_cfg.model_action_dim),
         "paligemma_variant": str(model_cfg.paligemma_variant),
         "action_expert_variant": str(model_cfg.action_expert_variant),
@@ -97,7 +118,7 @@ def get_model(cfg: Any, torch_dtype: Any = None) -> Any:
         model = model.to(target_dtype)
 
     num_steps = int(cfg.num_steps)
-    action_chunk = int(cfg.num_action_chunks)
+    action_chunk = model_action_horizon
     action_env_dim = int(cfg.action_dim)
 
     task = OmegaConf.select(model_cfg, "task", default=None)

@@ -115,6 +115,12 @@ class RealWorldEnv(gym.Env):
             self.env.call("get_wrapper_attr", "task_description")
         )
 
+    def _refresh_task_descriptions(self):
+        """Refresh prompts that may be supplied with external observations."""
+        self.task_descriptions = list(
+            self.env.call("get_wrapper_attr", "task_description")
+        )
+
     def get_hold_actions(
         self, fallback_actions: np.ndarray | None = None
     ) -> np.ndarray:
@@ -176,6 +182,10 @@ class RealWorldEnv(gym.Env):
     def elapsed_steps(self):
         return self._elapsed_steps
 
+    def close(self):
+        """Close local vector-environment resources."""
+        self.env.close()
+
     def _init_metrics(self):
         self.prev_step_reward = np.zeros(self.num_envs)
 
@@ -235,6 +245,7 @@ class RealWorldEnv(gym.Env):
         # TODO: handle partial reset
         raw_obs, infos = self.env.reset(seed=seed, options=options)
 
+        self._refresh_task_descriptions()
         extracted_obs = self._wrap_obs(raw_obs)
         if env_idx is not None:
             self._reset_metrics(env_idx)
@@ -339,6 +350,17 @@ class RealWorldEnv(gym.Env):
 
     def chunk_step(self, chunk_actions):
         # chunk_actions: [num_envs, chunk_step, action_dim]
+        native_chunk_method = None
+        if self.num_envs == 1:
+            try:
+                native_chunk_method = self.env.envs[0].get_wrapper_attr(
+                    "execute_action_chunk"
+                )
+            except AttributeError:
+                native_chunk_method = None
+        if callable(native_chunk_method):
+            return self._native_chunk_step(chunk_actions, native_chunk_method)
+
         chunk_size = chunk_actions.shape[1]
         obs_list = []
         infos_list = []
@@ -415,6 +437,50 @@ class RealWorldEnv(gym.Env):
             chunk_truncations,
             infos_list,
         )
+
+    def _native_chunk_step(self, chunk_actions, execute_action_chunk):
+        """Execute one whole chunk in a chunk-native external environment.
+
+        This path is intentionally limited to one real-world environment per
+        worker, matching :class:`RealWorldEnv`'s existing constraint. It
+        returns one final observation instead of fabricating observations for
+        action steps that execute outside RLinf.
+        """
+        if isinstance(chunk_actions, torch.Tensor):
+            chunk_actions = chunk_actions.detach().cpu().numpy()
+        actions = np.asarray(chunk_actions)
+        if actions.ndim != 3 or actions.shape[0] != 1:
+            raise ValueError(
+                "Native real-world chunk execution expects actions with shape "
+                f"[1, horizon, action_dim], got {actions.shape}."
+            )
+        raw_obs, reward, terminated, truncated, info = execute_action_chunk(actions[0])
+        self._refresh_task_descriptions()
+        executed_steps = int(info.get("executed_steps", actions.shape[1]))
+        if not 0 <= executed_steps <= actions.shape[1]:
+            raise ValueError(
+                f"Invalid executed_steps from native chunk: {executed_steps}."
+            )
+        self._elapsed_steps += executed_steps
+
+        def add_batch_dim(value):
+            if isinstance(value, dict):
+                return {key: add_batch_dim(item) for key, item in value.items()}
+            return np.expand_dims(value, axis=0)
+
+        obs = self._wrap_obs(add_batch_dim(raw_obs))
+        rewards = torch.as_tensor([[reward]], dtype=torch.float32)
+        terminations = torch.as_tensor([[terminated]], dtype=torch.bool)
+        truncations = torch.as_tensor([[truncated]], dtype=torch.bool)
+        vector_info = dict(info)
+        vector_info = self._record_metrics(
+            np.asarray([reward], dtype=np.float32),
+            np.asarray([terminated], dtype=bool),
+            np.asarray([np.isclose(reward, 1.0)], dtype=bool),
+            np.asarray([False], dtype=bool),
+            vector_info,
+        )
+        return [obs], rewards, terminations, truncations, [vector_info]
 
     def _handle_auto_reset(self, dones, _final_obs, infos):
         final_obs = copy.deepcopy(_final_obs)

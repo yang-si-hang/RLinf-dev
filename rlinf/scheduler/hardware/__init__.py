@@ -32,6 +32,8 @@ from .robots import (
     RobotAutoConfig,
     Turtle2Config,
     Turtle2HWInfo,
+    UR10eConfig,
+    UR10eHWInfo,
 )
 
 __all__ = [
@@ -55,4 +57,6 @@ __all__ = [
     "RobotAutoConfig",
     "Turtle2Config",
     "Turtle2HWInfo",
+    "UR10eConfig",
+    "UR10eHWInfo",
 ]

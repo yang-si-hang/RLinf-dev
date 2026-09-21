@@ -14,6 +14,9 @@
 
 import logging
 import os
+import re
+import shutil
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 
 from omegaconf.dictconfig import DictConfig
@@ -30,6 +33,66 @@ if TYPE_CHECKING:
     from rlinf.workers.sft.fsdp_sft_worker import FSDPSftWorker
 
 logger = logging.getLogger(__name__)
+
+_STEP_CHECKPOINT_PATTERN = re.compile(r"global_step_(\d+)")
+
+
+def _prune_sft_checkpoints(
+    checkpoints_dir: Path, current_step: int, keep_period: int | None
+) -> list[Path]:
+    """Delete superseded SFT checkpoints and return the removed paths.
+
+    The current checkpoint is always retained. Periodic milestone checkpoints
+    are retained when ``keep_period`` is set; all other step checkpoints are
+    removed. Non-step entries, symlinks, and files are left untouched.
+
+    Args:
+        checkpoints_dir: Directory containing ``global_step_<N>`` directories.
+        current_step: Step of the checkpoint that has just finished saving.
+        keep_period: Positive milestone interval, or ``None`` to keep only the
+            current checkpoint.
+
+    Returns:
+        Paths of checkpoint directories that were removed.
+
+    Raises:
+        ValueError: If ``keep_period`` is not a positive integer or ``None``.
+    """
+    if keep_period is not None and (
+        isinstance(keep_period, bool)
+        or not isinstance(keep_period, int)
+        or keep_period <= 0
+    ):
+        raise ValueError(
+            f"runner.keep_period must be a positive integer or null, got {keep_period!r}."
+        )
+
+    checkpoints_dir = checkpoints_dir.resolve()
+    if not checkpoints_dir.is_dir():
+        return []
+
+    removed = []
+    for checkpoint_path in checkpoints_dir.iterdir():
+        match = _STEP_CHECKPOINT_PATTERN.fullmatch(checkpoint_path.name)
+        if (
+            match is None
+            or checkpoint_path.is_symlink()
+            or not checkpoint_path.is_dir()
+        ):
+            continue
+        step = int(match.group(1))
+        if step == current_step or (
+            keep_period is not None and step % keep_period == 0
+        ):
+            continue
+        # The child-name check above and resolved-parent check keep deletion
+        # strictly scoped to checkpoint directories managed by this runner.
+        if checkpoint_path.resolve().parent != checkpoints_dir:
+            continue
+        shutil.rmtree(checkpoint_path)
+        removed.append(checkpoint_path)
+
+    return removed
 
 
 class SFTRunner:
@@ -52,6 +115,19 @@ class SFTRunner:
         self.early_stop = (
             EarlyStopController(early_stop_cfg) if early_stop_cfg is not None else None
         )
+        self._checkpoint_retention_enabled = "keep_period" in cfg.runner
+        self._checkpoint_keep_period = cfg.runner.get("keep_period", None)
+        if self._checkpoint_retention_enabled:
+            # Validate before training rather than after the first checkpoint.
+            if self._checkpoint_keep_period is not None and (
+                isinstance(self._checkpoint_keep_period, bool)
+                or not isinstance(self._checkpoint_keep_period, int)
+                or self._checkpoint_keep_period <= 0
+            ):
+                raise ValueError(
+                    "runner.keep_period must be a positive integer or null, "
+                    f"got {self._checkpoint_keep_period!r}."
+                )
 
         # compute `max_steps`
         self.set_max_steps()
@@ -192,6 +268,14 @@ class SFTRunner:
         actor_save_path = os.path.join(base_output_dir, "actor")
         os.makedirs(actor_save_path, exist_ok=True)
         self.actor.save_checkpoint(actor_save_path, self.global_step).wait()
+        if not is_best and self._checkpoint_retention_enabled:
+            removed = _prune_sft_checkpoints(
+                Path(checkpoint_root) / "checkpoints",
+                self.global_step,
+                self._checkpoint_keep_period,
+            )
+            for checkpoint_path in removed:
+                logger.info("Removed superseded checkpoint %s", checkpoint_path)
         if is_best and self.early_stop is not None:
             logger.info(
                 f"Saved best model (val_acc={self.early_stop.best_val_acc:.4f}) to {base_output_dir}"
