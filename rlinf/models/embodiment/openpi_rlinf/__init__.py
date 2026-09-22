@@ -70,6 +70,23 @@ def get_model(cfg: Any, torch_dtype: Any = None) -> Any:
     )
 
     model_cfg = cfg.openpi
+    task = OmegaConf.select(model_cfg, "task", default=None)
+    if task is None:
+        raise ValueError(
+            "actor.model.openpi.task is required: set it to 'sft', 'rl', or "
+            "'eval' to pick the concrete OpenPI PyTorch model variant."
+        )
+    task = str(task).lower()
+    freeze_vla = bool(OmegaConf.select(model_cfg, "rlt_freeze_vla", default=False))
+    if freeze_vla and (
+        task != "sft"
+        or not bool(OmegaConf.select(model_cfg, "use_rlt", default=False))
+        or float(OmegaConf.select(model_cfg, "rlt_alpha", default=1.0)) != 0.0
+    ):
+        raise ValueError(
+            "actor.model.openpi.rlt_freeze_vla requires task='sft', "
+            "use_rlt=True, and rlt_alpha=0.0."
+        )
     # Existing Pi0.5 templates predate the explicit switch, so preserve their
     # behavior by default. Pi0 templates set this field to False explicitly.
     pi05 = bool(OmegaConf.select(cfg, "pi05", default=True))
@@ -121,14 +138,6 @@ def get_model(cfg: Any, torch_dtype: Any = None) -> Any:
     action_chunk = model_action_horizon
     action_env_dim = int(cfg.action_dim)
 
-    task = OmegaConf.select(model_cfg, "task", default=None)
-    if task is None:
-        raise ValueError(
-            "actor.model.openpi.task is required: set it to 'sft', 'rl', or "
-            "'eval' to pick the concrete OpenPI PyTorch model variant."
-        )
-    task = str(task).lower()
-
     if task == "eval":
         wrapper = _build_eval_model(
             cfg,
@@ -168,6 +177,10 @@ def get_model(cfg: Any, torch_dtype: Any = None) -> Any:
             full_weights_path,
             expect_rlt=bool(OmegaConf.select(model_cfg, "use_rlt", default=False)),
         )
+
+    if freeze_vla:
+        wrapper.model.requires_grad_(False)
+        wrapper.rlt_module.requires_grad_(True)
 
     source = full_weights_path if full_weights_path is not None else safetensors_path
     logger.info(

@@ -58,6 +58,7 @@ class OpenPiPytorchRLTConfig:
 
     use_rlt: bool = False
     rlt_alpha: float = 1.0
+    rlt_freeze_vla: bool = False
     rlt_input_dim: int = 2048
     rlt_embed_dim: int = 2048
     rlt_prefix_seq_len: int = 768
@@ -75,6 +76,9 @@ def build_rlt_config(model_cfg: Any) -> OpenPiPytorchRLTConfig:
     return OpenPiPytorchRLTConfig(
         use_rlt=bool(OmegaConf.select(model_cfg, "use_rlt", default=False)),
         rlt_alpha=float(OmegaConf.select(model_cfg, "rlt_alpha", default=1.0)),
+        rlt_freeze_vla=bool(
+            OmegaConf.select(model_cfg, "rlt_freeze_vla", default=False)
+        ),
         rlt_input_dim=int(OmegaConf.select(model_cfg, "rlt_input_dim", default=2048)),
         rlt_embed_dim=int(OmegaConf.select(model_cfg, "rlt_embed_dim", default=2048)),
         rlt_prefix_seq_len=int(
