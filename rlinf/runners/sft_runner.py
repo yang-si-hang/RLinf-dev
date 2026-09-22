@@ -17,7 +17,6 @@ import os
 import re
 import shutil
 import sys
-import textwrap
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 
@@ -39,30 +38,14 @@ logger = logging.getLogger(__name__)
 _STEP_CHECKPOINT_PATTERN = re.compile(r"global_step_(\d+)")
 
 
-def _format_console_metrics(
-    step: int, total: int, metrics: dict, width: int = 80
-) -> str:
-    """Format one SFT step as short, readable lines for the console."""
-    lines = [f"Global Step: {step}/{total}"]
-    for prefix in ("time/", "train/", "eval/"):
-        values = [
-            f"{key}={value:.4g}"
-            if isinstance(value, (int, float))
-            else f"{key}={value}"
-            for key, value in metrics.items()
-            if key.startswith(prefix)
-        ]
-        if values:
-            lines.extend(
-                textwrap.wrap(
-                    ", ".join(values),
-                    width=width,
-                    initial_indent="  ",
-                    subsequent_indent="  ",
-                    break_long_words=False,
-                )
-            )
-    return "\n".join(lines)
+def _format_console_metrics(metrics: dict) -> str:
+    """Format SFT metrics on one console line."""
+    return ", ".join(
+        f"{key}={value:.4g}" if isinstance(value, (int, float)) else f"{key}={value}"
+        for prefix in ("time/", "train/", "eval/")
+        for key, value in metrics.items()
+        if key.startswith(prefix)
+    )
 
 
 def _prune_sft_checkpoints(
@@ -181,7 +164,9 @@ class SFTRunner:
 
     def run(self) -> None:
         start_step = self.global_step
-        console_log_interval = self.cfg.runner.get("console_log_interval", 1)
+        console_log_interval = self.cfg.runner.get(
+            "console_log_interval", self.cfg.runner.get("log_interval", 1)
+        )
         if (
             isinstance(console_log_interval, bool)
             or not isinstance(console_log_interval, int)
@@ -194,6 +179,7 @@ class SFTRunner:
             total=self.max_steps,
             desc="Global Step",
             dynamic_ncols=True,
+            mininterval=0,
             disable=not interactive,
         )
         for _step in range(start_step, self.max_steps):
@@ -257,18 +243,8 @@ class SFTRunner:
                 self.metric_logger.log(evaluate_metrics, _step)
 
             global_pbar.update(1)
-            if (
-                self.global_step == start_step + 1
-                or self.global_step % console_log_interval == 0
-                or self.global_step == self.max_steps
-                or should_stop
-            ):
-                message = _format_console_metrics(
-                    self.global_step,
-                    self.max_steps,
-                    logging_metrics,
-                    width=min(shutil.get_terminal_size().columns, 100),
-                )
+            if self.global_step % console_log_interval == 0:
+                message = _format_console_metrics(logging_metrics)
                 if interactive:
                     tqdm.write(message, file=sys.stderr)
                 else:
