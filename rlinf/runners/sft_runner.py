@@ -173,7 +173,15 @@ class SFTRunner:
             or console_log_interval < 1
         ):
             raise ValueError("runner.console_log_interval must be a positive integer")
-        interactive = sys.stderr.isatty()
+        progress_stream = sys.stderr
+        terminal_stream = None
+        if not progress_stream.isatty():
+            try:
+                terminal_stream = open("/dev/tty", "w")
+                progress_stream = terminal_stream
+            except OSError:
+                pass
+        interactive = progress_stream.isatty()
         global_pbar = tqdm(
             initial=start_step,
             total=self.max_steps,
@@ -181,6 +189,7 @@ class SFTRunner:
             dynamic_ncols=True,
             mininterval=0,
             disable=not interactive,
+            file=progress_stream,
         )
         for _step in range(start_step, self.max_steps):
             if hasattr(self.actor, "set_global_step"):
@@ -245,12 +254,20 @@ class SFTRunner:
             global_pbar.update(1)
             if self.global_step % console_log_interval == 0:
                 message = _format_console_metrics(logging_metrics)
-                if interactive:
+                if interactive and terminal_stream is not None:
+                    global_pbar.clear()
+                if interactive and terminal_stream is None:
                     tqdm.write(message, file=sys.stderr)
                 else:
                     print(message, file=sys.stderr, flush=True)
+                if interactive and terminal_stream is not None:
+                    global_pbar.refresh()
             if should_stop:
                 break
+
+        global_pbar.close()
+        if terminal_stream is not None:
+            terminal_stream.close()
 
         if self.early_stop is not None and self.early_stop.best_val_acc > 0:
             logger.info(
