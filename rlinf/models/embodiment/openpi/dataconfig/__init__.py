@@ -586,16 +586,16 @@ _CONFIGS = [
         pytorch_weight_path="checkpoints/torch/pi05_droid_polaris",
     ),
     TrainConfig(
-        name="pi05_ur10e_lora_finetune",
+        name="pi05_ur10e_plug_lora_ki_rlt",
         model=pi0_config.Pi0Config(
             pi05=True,
             action_dim=32,
-            action_horizon=20,
+            action_horizon=30,
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
         ),
         data=LeRobotURDataConfig(
-            repo_id="pick_v4_merge_crop_vid",
+            repo_id="plug_v2_merge_crop_vid",
             base_config=DataConfig(prompt_from_task=True),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader(
@@ -604,7 +604,7 @@ _CONFIGS = [
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             action_dim=32,
-            action_horizon=20,
+            action_horizon=30,
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
@@ -616,11 +616,11 @@ _CONFIGS = [
         num_workers=12,
         fsdp_devices=1,
         policy_metadata={
-            "prediction_horizon": 20,
-            "execution_horizon": 10,
+            "prediction_horizon": 30,
+            "execution_horizon": 15,
             "action_dim": UR_ACTION_DIM,
             "action_representation": "tcp_relative_xyz_rot6d_absolute_gripper",
-            "control_frequency_hz": 20,
+            "control_frequency_hz": 30,
         },
         # RLinf loads PyTorch checkpoints from actor.model.model_path. Native
         # OpenPI training instead uses weight_loader above for JAX initialization.

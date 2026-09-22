@@ -47,7 +47,7 @@ actor:
 
   model:
     model_type: "openpi_rlinf"
-    model_path: "/app/data/openpi-checkpoints/pi05_ur10e_plug_lora_ki/plug_20260920_223703/20000"
+    model_path: "/app/data/openpi-rlinf-checkpoints/pi05_ur10e_plug_lora_ki/plug_20260920_223703/20000"
 
     precision: fp32 # Stage1 建议先保持 fp32
 
@@ -61,7 +61,7 @@ actor:
     add_value_head: false
 
     openpi_data:
-      # repo_id: "plug_v2_merge_crop_vid"
+      repo_id: "plug_v2_merge_crop_vid"
       norm_stats_path: ${actor.model.model_path}/assets/plug_v2_merge_crop_vid/norm_stats.json
 
     openpi:
