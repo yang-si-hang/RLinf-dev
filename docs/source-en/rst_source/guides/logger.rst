@@ -96,3 +96,11 @@ metrics. You can check the metrics through your dashboard.
 
    All three loggers run **in parallel**; feel free to mix and match.
 
+SFT console output
+------------------
+
+Set ``runner.console_log_interval`` to a positive integer to print grouped
+``time/``, ``train/``, and ``eval/`` metrics every N steps. The first and final
+steps are always printed. Its default is 1. When output is piped through
+``tee``, the interactive progress bar is hidden so the log contains readable
+step blocks. Metric logger backends still record metrics every step.

@@ -26,6 +26,7 @@ runner:
 
   max_epochs: -1
   max_steps: 20000
+  console_log_interval: 100  # Print grouped console metrics every 100 steps.
 
   # RLinf official RLT Stage1 currently does not do validation.
   val_check_interval: -1
