@@ -3,6 +3,8 @@ defaults:
   - override hydra/job_logging: stdout
   - _self_
 
+root_dir: ${oc.env:PROJECT_ROOT,/root/autodl-tmp/workspace/RLinf-dev}
+
 hydra:
   run:
     dir: .
@@ -19,22 +21,22 @@ runner:
   task_type: sft
 
   logger:
-    log_path: "../results"
+    log_path: ${root_dir}/results
     project_name: rlinf-rlt
     experiment_name: "ur10e_plug_rlt_stage1_${now:%Y%m%d_%H%M%S}"
-    logger_backends: ["tensorboard"]
+    logger_backends: ["tensorboard", "wandb"]
 
   max_epochs: -1
-  max_steps: 20000
-  console_log_interval: 100  # Print grouped console metrics every 100 steps.
+  max_steps: 24000
+  console_log_interval: 100
 
   # RLinf official RLT Stage1 currently does not do validation.
   val_check_interval: -1
-  save_interval: 2000
+  save_interval: 3000
 
 
 data:
-  train_data_paths: "/app/data/lerobot_data/plug_v2_merge_crop_vid"
+  train_data_paths: ${root_dir}/data/lerobot_data/plug_v2_merge_crop_vid
   num_workers: 12
 
 
@@ -42,13 +44,13 @@ actor:
   group_name: "ActorGroup"
   training_backend: "fsdp"
 
-  micro_batch_size: 1
-  global_batch_size: 1
+  micro_batch_size: 16
+  global_batch_size: 32
   seed: 42
 
   model:
     model_type: "openpi_rlinf"
-    model_path: "/app/data/openpi-rlinf-checkpoints/pi05_ur10e_plug_lora_ki/plug_20260920_223703/20000"
+    model_path: ${root_dir}/data/openpi_rlinf_checkpoints/pi05_ur10e_plug_lora_ki/plug_20260920_223703/20000
 
     precision: fp32 # Stage1 建议先保持 fp32
 
@@ -88,8 +90,8 @@ actor:
       # ---------------- RLT ----------------
       use_rlt: true
 
-      # 你的实验：不再 SFT VLA
-      rlt_alpha: 0.0
+      rlt_alpha: 0.0  # 你的实验：不再 SFT VLA
+      rlt_freeze_vla: true
 
       rlt_input_dim: 2048
       rlt_embed_dim: 2048
