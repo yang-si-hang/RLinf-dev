@@ -137,6 +137,11 @@ Stage 1 的总损失为：
 
    total_loss = rlt_loss + rlt_alpha * vla_loss
 
+如果 Stage 1 SFT 只训练 RLT 模块，可在 ``actor.model.openpi`` 下同时设置
+``rlt_freeze_vla: true``、``use_rlt: true`` 和 ``rlt_alpha: 0.0``。该开关会冻结
+全部 VLA 参数，默认值为 ``false``，且仅适用于上述 ``task: sft`` 配置。完整的 VLA
+前向计算和用于诊断的 ``vla_loss`` 仍会执行。
+
 OpenPI 模型会暴露 VLA prefix hidden states。RLT token transformer 读取这些 prefix states，并输出紧凑向量 ``z_rl``。Stage 2 使用 ``z_rl`` 作为学习到的 RL 表示，而不是直接在图像观测上训练 actor-critic。
 
 Stage 1 中比较关键的字段：
