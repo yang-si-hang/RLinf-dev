@@ -56,6 +56,7 @@ class MetricLogger:
 
         self.wandb_proxy = logger_cfg.get("wandb_proxy", None)
         self.wandb_entity = logger_cfg.get("wandb_entity", None)
+        self.wandb_mode = logger_cfg.get("wandb_mode", None)
         self.swanlab_mode = logger_cfg.get("swanlab_mode", "cloud")
         if len(self.logger_backends) > 0:
             assert all(
@@ -90,6 +91,7 @@ class MetricLogger:
                 name=experiment_name,
                 config=self.config,
                 settings=settings,
+                mode=self.wandb_mode,
                 dir=wandb_log_path,
                 reinit=True,
             )

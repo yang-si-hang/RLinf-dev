@@ -1,0 +1,74 @@
+data:
+  lerobot_repo_id: plug_v2_merge_crop_vid
+  # The preparation script reads these LeRobot paths and writes durable replay.
+  replay_path: ${trainer.output_dir}/replay
+  replay_manifest_path: ${trainer.output_dir}/replay_manifest.json
+  success_dataset_path: ${oc.env:PROJECT_ROOT,/root/autodl-tmp/workspace/RLinf-dev}/data/lerobot_data/plug_v1_deploy_success_merge_vid
+  failure_dataset_path: ${oc.env:PROJECT_ROOT,/root/autodl-tmp/workspace/RLinf-dev}/data/lerobot_data/plug_v1_deploy_fail_merge_vid
+  success_z_path: ${oc.env:PROJECT_ROOT,/root/autodl-tmp/workspace/RLinf-dev}/results/rlt_z_success_step18000
+  failure_z_path: ${oc.env:PROJECT_ROOT,/root/autodl-tmp/workspace/RLinf-dev}/results/rlt_z_fail_step18000
+  stage1_checkpoint_step: 18000
+  executed_chunk_length: 15
+  drop_incomplete_suffix: true
+  vla_prediction_horizon: 30
+  action_representation: openpi_tcp_relative_xyz_rot6d_absolute_gripper
+  action_norm_stats_path: ${oc.env:PROJECT_ROOT,/root/autodl-tmp/workspace/RLinf-dev}/data/openpi_rlinf_checkpoints/pi05_ur10e_plug_lora_ki/plug_20260920_223703/20000/assets/plug_v2_merge_crop_vid/norm_stats.json
+  action_quantile_norm: true
+  success_step_reward: -1.0
+  failure_step_reward: -1.0
+  failure_terminal_reward: -750.0
+  # Hold out 20% of episodes separately within success and failure groups.
+  validation_fraction: 0.1
+runner:
+  logger:
+    log_path: ${trainer.output_dir}
+    project_name: rlinf
+    experiment_name: ur10e-rlt-stage2-critic
+    logger_backends: [wandb]
+    wandb_entity: null
+    # The server's online W&B initialization can time out; sync after training.
+    wandb_mode: ${oc.env:WANDB_MODE,offline}
+
+algorithm:
+  critic_only: true
+  target_action_source: recorded_vla_action
+  gamma: 0.99
+  # Polyak target update rate: target <- (1-tau)*target + tau*critic.
+  tau: 0.005
+  actor_updates: 0
+  seed: 1234
+  replay_buffer:
+    # Replay is saved to disk; this many individual transitions stay cached per class.
+    auto_save: true
+    cache_size: 23  # 影响读取速度
+    # Candidate trajectory window for sampling; large enough to include the whole set.
+    sample_window_size: 100000
+    trajectory_format: pt
+  # Sampler draws ordinary/success-terminal/failure-terminal at 60/20/20.
+
+actor:
+  model:
+    z_dim: 2048
+    proprio_dim: 10
+    action_dim: 10
+    num_action_chunks: 15
+    critic_type: twin_q
+trainer:
+  device: cuda
+  output_dir: ${oc.env:PROJECT_ROOT,/root/autodl-tmp/workspace/RLinf-dev}/results/rlt_stage2_ur10e_critic
+  resume_checkpoint: null
+  total_steps: 20000
+  # Offline minibatch size; independent of the rollout global batch size.
+  batch_size: 64
+  # Matches algorithm.critic_optim.lr in maniskill_rlt_stage2_td3_mlp.yaml.
+  learning_rate: 0.0001
+  # Matches the RLT TD3 MLP critic head (256 hidden width, two layers).
+  hidden_dim: 256
+  hidden_layers: 2
+  # Matches algorithm.critic_optim.clip_grad in the TD3 MLP config.
+  max_grad_norm: 10.0
+  log_interval: 100
+  save_interval: 1000
+  # Keep every 5000-step checkpoint; retain the latest between these steps.
+  keep_period: 3000
+  min_free_bytes: 1073741824
