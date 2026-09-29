@@ -27,12 +27,29 @@ def _append_rlt_transition_obs(
     result: dict[str, Any],
     rlt_obs: dict[str, torch.Tensor],
     final_obs: dict[str, Any] | None,
+    ref_action_space: Any | None = None,
 ) -> None:
     transition_obs = rlt_obs
     if final_obs is not None:
         transition_obs = feature_model.extract_rlt_obs(final_obs)
+        if ref_action_space is not None:
+            transition_obs = _normalize_reference(transition_obs, ref_action_space)
     for key in RLT_OBS_KEYS:
         result["forward_inputs"][f"{RLT_TRANSITION_PREFIX}{key}"] = transition_obs[key]
+
+
+def _normalize_reference(
+    rlt_obs: dict[str, torch.Tensor], action_space: Any
+) -> dict[str, torch.Tensor]:
+    """OpenPI output_transform returns physical relative actions; normalize once."""
+    reference = rlt_obs["ref_chunk"]
+    normalized = action_space.normalize(reference.detach().cpu().numpy())
+    return {
+        **rlt_obs,
+        "ref_chunk": torch.as_tensor(
+            normalized, device=reference.device, dtype=torch.float32
+        ),
+    }
 
 
 def predict_rlt_actions(
@@ -47,9 +64,12 @@ def predict_rlt_actions(
     rlt_switch_flags: torch.Tensor | None = None,
     intervene_requested: torch.Tensor | None = None,
     expert_model: Any | None = None,
+    ref_action_space: Any | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     with torch.no_grad():
         rlt_obs = feature_model.extract_rlt_obs(env_obs)
+        if ref_action_space is not None:
+            rlt_obs = _normalize_reference(rlt_obs, ref_action_space)
         actions, result = policy_model.predict_action_batch(
             env_obs=rlt_obs,
             mode=mode,
@@ -79,6 +99,7 @@ def predict_rlt_actions(
             result=result,
             rlt_obs=rlt_obs,
             final_obs=final_obs,
+            ref_action_space=ref_action_space,
         )
 
     return actions, result

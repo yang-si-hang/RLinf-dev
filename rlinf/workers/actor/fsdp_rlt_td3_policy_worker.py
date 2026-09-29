@@ -14,6 +14,7 @@
 
 import torch
 
+from rlinf.algorithms.rlt.offline_critic import load_ur10e_offline_critic
 from rlinf.models.embodiment.base_policy import ForwardType
 from rlinf.scheduler import Worker
 from rlinf.workers.actor.fsdp_rlt_ac_policy_worker import (
@@ -176,3 +177,24 @@ class RLTTD3LossMixin(RLTACLossMixin):
 
 class RLTTD3FSDPPolicy(RLTTD3LossMixin, RLTACFSDPPolicy):
     """Synchronous RLT TD3 worker using the current RLT rollout data flow."""
+
+    def model_provider_func(self):
+        model = super().model_provider_func()
+        checkpoint_path = self.cfg.algorithm.get("ur10e_offline_critic_checkpoint_path")
+        if checkpoint_path:
+            if not self.cfg.algorithm.get(
+                "ur10e_actor_only", False
+            ) or self.cfg.runner.get("ckpt_path"):
+                raise ValueError(
+                    "UR10e offline critic import requires actor-only mode without a full model checkpoint"
+                )
+            device_cfg = self.cfg.env.train.override_cfg
+            load_ur10e_offline_critic(
+                model,
+                checkpoint_path,
+                device_cfg.replay_manifest_path,
+                device_cfg.action_norm_stats_path,
+                device_cfg.stage1_success_metadata_path,
+                device_cfg.stage1_failure_metadata_path,
+            )
+        return model

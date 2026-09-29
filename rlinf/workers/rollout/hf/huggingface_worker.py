@@ -158,6 +158,17 @@ class MultiStepRolloutWorker(Worker):
             self.rlt_feature_model.eval()
             self.rlt_feature_model.requires_grad_(False)
             self.rlt_route = build_rlt_route(self.cfg)
+            if bool(self.cfg.algorithm.get("ur10e_actor_only", False)):
+                from rlinf.envs.realworld.ur10e.action_space import UR10eActionSpace
+
+                device_cfg = self.cfg.env.train.override_cfg
+                self.ur10e_ref_action_space = UR10eActionSpace(
+                    device_cfg.action_norm_stats_path,
+                    device_cfg.replay_manifest_path,
+                    stage1_step=int(device_cfg.stage1_checkpoint_step),
+                    stage1_success_metadata_path=device_cfg.stage1_success_metadata_path,
+                    stage1_failure_metadata_path=device_cfg.stage1_failure_metadata_path,
+                )
 
         if self.cfg.rollout.get("expert_model", None) and not self.enable_opd:
             expert_model_config = build_expert_model_config(
@@ -574,6 +585,7 @@ class MultiStepRolloutWorker(Worker):
                 rlt_switch_flags=rlt_switch_flags,
                 intervene_requested=intervene_requested,
                 expert_model=self.expert_model,
+                ref_action_space=getattr(self, "ur10e_ref_action_space", None),
             )
         return self.predict(env_obs, mode=mode)
 
@@ -678,6 +690,7 @@ class MultiStepRolloutWorker(Worker):
     @Worker.timer("generate_one_epoch")
     async def generate_one_epoch(self, input_channel: Channel, output_channel: Channel):
         self.update_dagger_beta()
+        ur10e_online = bool(self.cfg.algorithm.get("ur10e_actor_only", False))
         for _ in range(self.n_train_chunk_steps):
             for stage_id in range(self.num_pipeline_stages):
                 env_output = await self.recv_from(
@@ -690,18 +703,34 @@ class MultiStepRolloutWorker(Worker):
                     merge_fn=self._merge_obs_batches,
                     infer_batch_size_fn=self._infer_env_batch_size,
                 ).async_wait()
-                actions, result = self._predict_rollout_actions(
-                    env_output["obs"],
-                    final_obs=env_output.get("final_obs", None),
-                    rlt_switch_flags=env_output.get("rlt_switch_flags", None),
-                    intervene_requested=env_output.get("intervene_flags", None),
-                )
-
-                policy_output = self._build_policy_output(
-                    actions,
-                    result,
-                    final_obs=env_output.get("final_obs", None),
-                )
+                if ur10e_online and env_output.get("episode_end", False):
+                    return
+                try:
+                    actions, result = self._predict_rollout_actions(
+                        env_output["obs"],
+                        final_obs=env_output.get("final_obs", None),
+                        rlt_switch_flags=env_output.get("rlt_switch_flags", None),
+                        intervene_requested=env_output.get("intervene_flags", None),
+                    )
+                    policy_output = self._build_policy_output(
+                        actions,
+                        result,
+                        final_obs=env_output.get("final_obs", None),
+                    )
+                except Exception as exc:
+                    if not ur10e_online:
+                        raise
+                    self.log_error(f"UR10e feature or actor inference failed: {exc}")
+                    policy_output = PolicyOutput(
+                        actions=torch.zeros(
+                            self.train_batch_size,
+                            self.model_cfg.num_action_chunks,
+                            self.model_cfg.action_dim,
+                        ),
+                        forward_inputs={
+                            "rlt_rollout_error": torch.ones(self.train_batch_size, 1)
+                        },
+                    )
                 self.send_to(
                     group_name=self.cfg.env.group_name,
                     channel=output_channel,
@@ -723,6 +752,8 @@ class MultiStepRolloutWorker(Worker):
                 merge_fn=self._merge_obs_batches,
                 infer_batch_size_fn=self._infer_env_batch_size,
             ).async_wait()
+            if ur10e_online and env_output.get("episode_end", False):
+                continue
             if not self.collect_final_values:
                 policy_output = PolicyOutput(
                     versions=torch.zeros_like(
@@ -967,6 +998,9 @@ class MultiStepRolloutWorker(Worker):
 
         return {
             "obs": merged_obs,
+            "episode_end": all(
+                bool(batch.get("episode_end", False)) for batch in obs_batches
+            ),
             "final_obs": merged_final_obs,
             "rlt_switch_flags": self._merge_optional_flag_tensors(
                 obs_dicts, rlt_switch_flags_list

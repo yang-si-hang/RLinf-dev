@@ -22,7 +22,10 @@ import torch
 from omegaconf import DictConfig, OmegaConf
 
 from rlinf.algorithms.registry import calculate_adv_and_returns
-from rlinf.algorithms.rlt.transition import update_rlt_transitions
+from rlinf.algorithms.rlt.transition import (
+    extract_rlt_obs_from_forward_inputs,
+    update_rlt_transitions,
+)
 from rlinf.data.schema.embodied_trajectory_builder import (
     EmbodiedLerobotTrajectoryBuilder,
     EmbodiedTrajectoryBuilder,
@@ -978,6 +981,8 @@ class EnvWorker(Worker):
             "obs": env_batch["obs"],
             "final_obs": env_batch["final_obs"],
         }
+        if bool(self.cfg.algorithm.get("ur10e_actor_only", False)):
+            data["episode_end"] = bool(env_batch.get("episode_end", False))
         if self.enable_rlt:
             data["rlt_switch_flags"] = env_batch.get("rlt_switch_flags", None)
             data["intervene_flags"] = env_batch.get("intervene_flags", None)
@@ -1107,6 +1112,10 @@ class EnvWorker(Worker):
         *,
         cooperative_yield: bool,
     ) -> dict[str, torch.Tensor]:
+        if bool(self.cfg.algorithm.get("ur10e_actor_only", False)):
+            return await self._run_ur10e_episode(
+                input_channel, rollout_channel, actor_channel
+            )
         self.trajectory_builders = self._prepare_trajectory_builders(
             getattr(self, "trajectory_builders", None)
         )
@@ -1390,6 +1399,147 @@ class EnvWorker(Worker):
             env_metrics[key] = torch.cat(value, dim=0).contiguous().cpu()
 
         return env_metrics
+
+    async def _run_ur10e_episode(
+        self,
+        input_channel: Channel,
+        rollout_channel: Channel,
+        actor_channel: Channel | None,
+    ) -> dict[str, torch.Tensor]:
+        """Collect one complete UR episode before exposing any replay samples."""
+        if (
+            self.stage_num != 1
+            or self.train_batch_size != 1
+            or self.rollout_epoch != 1
+            or self.n_train_chunk_steps != 30
+            or self.model_cfg.num_action_chunks != 15
+            or self.cfg.env.train.override_cfg.max_num_steps != 450
+        ):
+            raise ValueError(
+                "UR10e online mode requires one environment, 15-step chunks and 450-step episodes"
+            )
+        if self._prefetched_train_bootstrap is not None:
+            raise RuntimeError("UR10e online mode forbids prefetched observations")
+        self.trajectory_builders = self._prepare_trajectory_builders(None)
+        builder = self.trajectory_builders[0]
+        env_output = self._bootstrap_and_send_train(rollout_channel)[0]
+        pending_obs = None
+        outcome = "INVALID_ABORT"
+        for _ in range(self.n_train_chunk_steps):
+            policy_output = self.recv_from(
+                group_name=self.cfg.rollout.group_name,
+                channel=input_channel,
+                tag="train_rollout_results",
+                route_key=0,
+                batch_size=self.train_batch_size,
+                merge_fn=PolicyOutput.merge,
+                infer_batch_size_fn=self._infer_rollout_batch_size,
+            )
+            try:
+                curr_rlt_obs = extract_rlt_obs_from_forward_inputs(
+                    policy_output.forward_inputs
+                )
+                if pending_obs is not None:
+                    builder.append_transitions(
+                        pending_obs, copy_dict_tensor(curr_rlt_obs)
+                    )
+                pending_obs = curr_rlt_obs
+                env_output, _, _ = self.env_interact_step(policy_output.actions, 0)
+            except Exception as exc:
+                self.log_error(
+                    f"UR10e episode aborted after rollout or environment error: {exc}"
+                )
+                builder.clear()
+                pending_obs = None
+                outcome = "INVALID_ABORT"
+                end_batch = env_output.to_dict()
+                end_batch["episode_end"] = True
+                self.send_to(
+                    group_name=self.cfg.rollout.group_name,
+                    channel=rollout_channel,
+                    data=self._build_rollout_input_data(end_batch),
+                    split_fn=self._obs_split_fn,
+                    mode="train",
+                    tag="rollout_results",
+                    route_key=0,
+                )
+                break
+            info = env_output.env_infos or {}
+            outcome = info.get("outcome", "INVALID_ABORT")
+            if outcome == "INVALID_ABORT" or not info.get("record_transition", False):
+                builder.clear()
+                pending_obs = None
+            else:
+                policy_output.forward_inputs["executed_steps"] = torch.tensor(
+                    [[int(info["executed_steps"])]], dtype=torch.int64
+                )
+                policy_output.forward_inputs["terminal_next_obs_placeholder"] = (
+                    torch.full(
+                        (1, 1), outcome in {"SUCCESS", "FAILURE"}, dtype=torch.bool
+                    )
+                )
+                builder.append_step_result(
+                    ChunkStepResult(
+                        actions=policy_output.forward_inputs["action"],
+                        forward_inputs=policy_output.forward_inputs,
+                        versions=policy_output.versions,
+                        rewards=env_output.rewards,
+                        terminations=env_output.terminations,
+                        truncations=env_output.truncations,
+                        dones=env_output.dones,
+                    )
+                )
+            if outcome != "RUNNING":
+                if outcome in {"SUCCESS", "FAILURE"}:
+                    builder.append_transitions(
+                        pending_obs, copy_dict_tensor(pending_obs)
+                    )
+                pending_obs = None
+                end_batch = env_output.to_dict()
+                end_batch["episode_end"] = True
+                self.send_to(
+                    group_name=self.cfg.rollout.group_name,
+                    channel=rollout_channel,
+                    data=self._build_rollout_input_data(end_batch),
+                    split_fn=self._obs_split_fn,
+                    mode="train",
+                    tag="rollout_results",
+                    route_key=0,
+                )
+                break
+            env_batch = env_output.to_dict()
+            env_batch["episode_end"] = False
+            self.send_to(
+                group_name=self.cfg.rollout.group_name,
+                channel=rollout_channel,
+                data=self._build_rollout_input_data(env_batch),
+                split_fn=self._obs_split_fn,
+                mode="train",
+                tag="rollout_results",
+                route_key=0,
+            )
+        else:
+            builder.clear()
+            outcome = "INVALID_ABORT"
+        if outcome in {"SUCCESS", "FAILURE"}:
+            n = len(builder.actions)
+            if not n or any(
+                len(field) != n
+                for field in (builder.rewards, builder.curr_obs, builder.next_obs)
+            ):
+                builder.clear()
+                outcome = "INVALID_ABORT"
+        if actor_channel is not None:
+            if outcome == "INVALID_ABORT":
+                builder.clear()
+                for _ in range(self.actor_split_num):
+                    actor_channel.put(None, async_op=True)
+            else:
+                await self.send_rollout_trajectories(builder, actor_channel)
+        self.finish_rollout()
+        return {
+            "ur10e/valid_episode": torch.tensor([float(outcome != "INVALID_ABORT")])
+        }
 
     @Worker.timer("interact")
     async def interact(

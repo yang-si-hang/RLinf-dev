@@ -75,6 +75,19 @@ class EmbodiedRunner:
         self.overlap_env_bootstrap = bool(
             self.cfg.runner.get("overlap_env_bootstrap", False)
         )
+        self.ur10e_online = bool(self.cfg.algorithm.get("ur10e_actor_only", False))
+        if self.ur10e_online:
+            if self.overlap_env_bootstrap or self.cfg.runner.get(
+                "use_training_pipeline", False
+            ):
+                raise ValueError(
+                    "UR10e online episodes require synchronous rollout without bootstrap prefetch"
+                )
+            device_cfg = self.cfg.env.train.override_cfg
+            if not device_cfg.get("action_norm_stats_path") or not device_cfg.get(
+                "replay_manifest_path"
+            ):
+                raise ValueError("UR10e online mode requires OpenPI stats and replay manifest paths")
 
         # Step-gated profiling: ``cluster.profiling.steps`` lists the global step
         profiling_raw = self.cfg.cluster.get("profiling", None)
@@ -476,6 +489,19 @@ class EmbodiedRunner:
         self.env.stop_profile().wait()
         self.logger.info(f"Closed profiling window at step {step_idx}")
 
+    def _confirm_ur10e_reset(self) -> None:
+        """Gate episode bootstrap in the RLinf main process terminal."""
+        expected = (
+            str(self.cfg.env.train.override_cfg.get("reset_confirmation_text", "start"))
+            .strip()
+            .lower()
+        )
+        response = input(
+            f"Physically reset UR10e, then type {expected!r} to start episode: "
+        )
+        if response.strip().lower() != expected:
+            raise KeyboardInterrupt("UR10e physical reset was not confirmed")
+
     def run(self):
         if self.cfg.runner.get("use_training_pipeline", False):
             return self.run_pipeline()
@@ -483,6 +509,8 @@ class EmbodiedRunner:
         start_step = self.global_step
         start_time = time.time()
         for _step in range(start_step, self.max_steps):
+            if self.ur10e_online:
+                self._confirm_ur10e_reset()
             # set global step
             self.actor.set_global_step(self.global_step).wait()
             self.rollout.set_global_step(self.global_step).wait()

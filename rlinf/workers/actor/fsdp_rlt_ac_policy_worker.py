@@ -609,6 +609,32 @@ class RLTACReplayMixin:
         recv_list: list[Trajectory],
     ) -> tuple[int, int]:
         self._last_replay_metrics = {}
+        if bool(self.cfg.algorithm.get("ur10e_actor_only", False)):
+            for traj in recv_list:
+                if (
+                    traj.actions is None
+                    or traj.rewards is None
+                    or traj.terminations is None
+                    or not isinstance(traj.curr_obs, dict)
+                    or not isinstance(traj.next_obs, dict)
+                ):
+                    raise ValueError(
+                        "UR10e replay requires complete action, reward, done and RLT observation fields"
+                    )
+                n = traj.actions.shape[0]
+                if (
+                    traj.actions.shape[1:] != (1, 150)
+                    or traj.rewards.shape != (n, 1, 15)
+                    or traj.terminations.shape != (n, 1, 15)
+                    or any(
+                        value.shape[0] != n
+                        for value in (*traj.curr_obs.values(), *traj.next_obs.values())
+                    )
+                    or not traj.terminations[-1].any()
+                ):
+                    raise ValueError(
+                        "UR10e replay episode is incomplete or has inconsistent chunk dimensions"
+                    )
 
         if use_simulator_transition_replay(self.cfg):
             replay_list = []
@@ -700,9 +726,12 @@ class RLTACFSDPPolicy(RLTACLossMixin, RLTACReplayMixin, EmbodiedSACFSDPPolicy):
         recv_list = []
         for _ in range(split_num):
             trajectory: Trajectory = await input_channel.get(async_op=True).async_wait()
-            recv_list.append(trajectory)
+            if trajectory is not None:
+                recv_list.append(trajectory)
 
-        added, completed = self._ingest_rollout_trajectories(recv_list)
+        added, completed = (
+            self._ingest_rollout_trajectories(recv_list) if recv_list else (0, 0)
+        )
         self._update_rollout_ingest_counters(added, completed)
 
     def _global_rlt_counters(self) -> dict[str, float]:

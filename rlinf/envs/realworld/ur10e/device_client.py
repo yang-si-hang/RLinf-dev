@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 UR_ACTION_DIM = 10
 
 
@@ -43,11 +43,15 @@ class UR10eObservation:
 class UR10eChunkResult:
     """Result returned after an external service consumes one action chunk."""
 
-    observation: UR10eObservation
+    observation: UR10eObservation | None
     chunk_id: int
     executed_steps: int
-    terminated: bool
-    truncated: bool
+    rewards: np.ndarray
+    terminations: np.ndarray
+    truncations: np.ndarray
+    outcome: str
+    record_transition: bool
+    terminal_reason: str
     message: str = ""
 
 
@@ -148,19 +152,41 @@ class UR10eDeviceClient:
                     f"Invalid {name} descriptor or payload."
                 ) from exc
             arrays.append(array)
+        if (
+            arrays[0].dtype != np.float32
+            or arrays[0].shape != (10,)
+            or not np.isfinite(arrays[0]).all()
+            or any(
+                array.dtype != np.uint8 or array.shape != (224, 224, 3)
+                for array in arrays[1:]
+            )
+        ):
+            raise UR10eDeviceError("Observation arrays have invalid dtype or shape.")
+        try:
+            capture_timestamp = float(metadata["capture_timestamp"])
+            robot_timestamp = float(metadata["robot_timestamp"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise UR10eDeviceError(
+                "Observation timestamps are missing or invalid."
+            ) from exc
+        if not np.isfinite([capture_timestamp, robot_timestamp]).all():
+            raise UR10eDeviceError("Observation timestamps must be finite.")
+        task_description = metadata.get("task_description")
+        if not isinstance(task_description, str) or not task_description.strip():
+            raise UR10eDeviceError("Observation task description is missing.")
         return UR10eObservation(
             state=arrays[0],
             base_image=arrays[1],
             wrist_image=arrays[2],
-            capture_timestamp=float(metadata["capture_timestamp"]),
-            robot_timestamp=float(metadata["robot_timestamp"]),
-            task_description=str(metadata.get("task_description", "")).strip(),
+            capture_timestamp=capture_timestamp,
+            robot_timestamp=robot_timestamp,
+            task_description=task_description.strip(),
         )
 
     @classmethod
     def _decode_response(
         cls, frames: list[bytes], request: dict[str, Any]
-    ) -> tuple[dict[str, Any], UR10eObservation]:
+    ) -> tuple[dict[str, Any], UR10eObservation | None]:
         if not frames:
             raise UR10eDeviceError("Device service returned an empty response.")
         try:
@@ -169,6 +195,8 @@ class UR10eDeviceClient:
             raise UR10eDeviceError(
                 "Device service returned invalid JSON metadata."
             ) from exc
+        if not isinstance(metadata, dict):
+            raise UR10eDeviceError("Device response metadata must be an object.")
         if metadata.get("protocol_version") != PROTOCOL_VERSION:
             raise UR10eDeviceError(
                 f"Unsupported device protocol version: {metadata.get('protocol_version')}."
@@ -186,7 +214,14 @@ class UR10eDeviceClient:
             raise UR10eDeviceError(
                 str(metadata.get("message", "Device request failed."))
             )
-        return metadata, cls._decode_observation(metadata, frames)
+        has_observation = bool(metadata.get("observation"))
+        if request["type"] == "GET_INITIAL_OBSERVATION" and not has_observation:
+            raise UR10eDeviceError("Initial observation is missing.")
+        if not has_observation and len(frames) != 1:
+            raise UR10eDeviceError("Unexpected observation frames.")
+        return metadata, cls._decode_observation(
+            metadata, frames
+        ) if has_observation else None
 
     async def health(self) -> dict[str, Any]:
         """Check service reachability without changing device state."""
@@ -208,6 +243,7 @@ class UR10eDeviceClient:
         request = self._request_metadata("GET_INITIAL_OBSERVATION", None)
         frames = await self._request_async(request)
         _, observation = self._decode_response(frames, request)
+        assert observation is not None
         return observation
 
     async def execute_chunk(
@@ -215,28 +251,96 @@ class UR10eDeviceClient:
     ) -> UR10eChunkResult:
         """Submit one complete action chunk and await its final observation."""
         actions = np.ascontiguousarray(actions, dtype=np.float32)
-        if actions.ndim != 2 or actions.shape[1] != UR_ACTION_DIM:
-            raise ValueError(f"actions must have shape [horizon, {UR_ACTION_DIM}].")
+        if actions.shape != (15, UR_ACTION_DIM):
+            raise ValueError("actions must have shape [15, 10].")
         if actions.shape[0] == 0 or not np.all(np.isfinite(actions)):
             raise ValueError("actions must be non-empty and finite.")
         request = self._request_metadata("EXECUTE_CHUNK", int(chunk_id))
         request["actions"] = {"shape": list(actions.shape), "dtype": actions.dtype.str}
         frames = await self._request_async(request, actions.tobytes())
         metadata, observation = self._decode_response(frames, request)
-        response_chunk_id = int(metadata.get("chunk_id", -1))
+        if type(metadata.get("chunk_id")) is not int:
+            raise UR10eDeviceError("Chunk ID must be an integer.")
+        response_chunk_id = metadata["chunk_id"]
         if response_chunk_id != chunk_id:
             raise UR10eDeviceError(
                 f"Chunk ID mismatch: sent {chunk_id}, received {response_chunk_id}."
             )
-        executed_steps = int(metadata.get("executed_steps", -1))
+        if type(metadata.get("executed_steps")) is not int:
+            raise UR10eDeviceError("executed_steps must be an integer.")
+        executed_steps = metadata["executed_steps"]
         if not 0 <= executed_steps <= actions.shape[0]:
             raise UR10eDeviceError(f"Invalid executed_steps: {executed_steps}.")
+        try:
+            raw_rewards = metadata["rewards"]
+            if not isinstance(raw_rewards, list) or any(
+                type(value) not in (int, float) for value in raw_rewards
+            ):
+                raise ValueError("rewards must contain JSON numbers")
+            rewards = np.asarray(raw_rewards, dtype=np.float32)
+            raw_terminations = metadata["terminations"]
+            raw_truncations = metadata["truncations"]
+            if any(type(v) is not bool for v in raw_terminations + raw_truncations):
+                raise ValueError("done arrays must contain JSON booleans")
+            terminations = np.asarray(raw_terminations, dtype=np.bool_)
+            truncations = np.asarray(raw_truncations, dtype=np.bool_)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise UR10eDeviceError("Invalid chunk result arrays.") from exc
+        if (
+            any(a.shape != (15,) for a in (rewards, terminations, truncations))
+            or not np.isfinite(rewards).all()
+        ):
+            raise UR10eDeviceError("Chunk result arrays must be finite length 15.")
+        outcome = metadata.get("outcome")
+        record = metadata.get("record_transition")
+        reason = metadata.get("terminal_reason", "")
+        if (
+            outcome not in {"RUNNING", "SUCCESS", "FAILURE", "INVALID_ABORT"}
+            or type(record) is not bool
+            or not isinstance(reason, str)
+        ):
+            raise UR10eDeviceError("Invalid chunk outcome metadata.")
+        if not isinstance(metadata.get("message"), str):
+            raise UR10eDeviceError("Chunk message must be a string.")
+        if (
+            np.any(rewards[executed_steps:] != 0)
+            or np.any(terminations[executed_steps:])
+            or np.any(truncations)
+        ):
+            raise UR10eDeviceError("Unexecuted suffix or truncations contain labels.")
+        expected = np.full(executed_steps, -1.0, dtype=np.float32)
+        if outcome == "RUNNING":
+            valid = (
+                executed_steps == 15
+                and record
+                and observation is not None
+                and not terminations.any()
+                and not reason
+            )
+        elif outcome in {"SUCCESS", "FAILURE"}:
+            if executed_steps:
+                expected[-1] = -750.0 if outcome == "FAILURE" else -1.0
+            valid = (
+                executed_steps > 0
+                and record
+                and bool(terminations[executed_steps - 1])
+                and terminations.sum() == 1
+                and bool(reason)
+            )
+        else:
+            valid = not record and not terminations.any()
+        if not valid or not np.array_equal(rewards[:executed_steps], expected):
+            raise UR10eDeviceError("Chunk rewards, done flags and outcome disagree.")
         return UR10eChunkResult(
             observation=observation,
             chunk_id=response_chunk_id,
             executed_steps=executed_steps,
-            terminated=bool(metadata.get("terminated", False)),
-            truncated=bool(metadata.get("truncated", False)),
+            rewards=rewards,
+            terminations=terminations,
+            truncations=truncations,
+            outcome=outcome,
+            record_transition=record,
+            terminal_reason=reason,
             message=str(metadata.get("message", "")),
         )
 

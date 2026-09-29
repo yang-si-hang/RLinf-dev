@@ -18,8 +18,9 @@ from typing import Any, Optional
 import gymnasium as gym
 import numpy as np
 
-from rlinf.scheduler import UR10eHWInfo, WorkerInfo
+from rlinf.scheduler import HardwareInfo, UR10eHWInfo, WorkerInfo
 
+from .action_space import UR10eActionSpace
 from .device_client import UR10eDeviceClient, UR10eObservation
 
 
@@ -33,6 +34,11 @@ class UR10eEnvConfig:
     reset_confirmation_text: str = "start"
     camera_max_age_ms: int = 500
     max_num_steps: int = 240
+    action_norm_stats_path: str | None = None
+    replay_manifest_path: str | None = None
+    stage1_checkpoint_step: int = 18000
+    stage1_success_metadata_path: str | None = None
+    stage1_failure_metadata_path: str | None = None
 
     def __post_init__(self) -> None:
         if self.timeout_ms <= 0 or self.camera_max_age_ms < 0:
@@ -54,22 +60,33 @@ class UR10eEnv(gym.Env):
         self,
         override_cfg: dict[str, Any],
         worker_info: Optional[WorkerInfo],
-        hardware_info: Optional[UR10eHWInfo],
+        hardware_info: Optional[HardwareInfo],
         env_idx: int,
         **_: Any,
     ):
         del worker_info, env_idx
         self.config = UR10eEnvConfig(**override_cfg)
-        if hardware_info is not None and not isinstance(hardware_info, UR10eHWInfo):
-            raise TypeError(f"Expected UR10eHWInfo, got {type(hardware_info)}.")
         endpoint = self.config.endpoint
-        if endpoint is None and hardware_info is not None:
+        if endpoint is None and isinstance(hardware_info, UR10eHWInfo):
             endpoint = hardware_info.config.endpoint
         if not endpoint:
-            raise ValueError("UR10e device service endpoint is required.")
+            raise ValueError(
+                "UR10e device service endpoint is required in override_cfg or UR10eHWInfo."
+            )
 
         self._task_description = ""
         self._client = UR10eDeviceClient(endpoint, timeout_ms=self.config.timeout_ms)
+        self._action_space = (
+            UR10eActionSpace(
+                self.config.action_norm_stats_path,
+                self.config.replay_manifest_path,
+                stage1_step=self.config.stage1_checkpoint_step,
+                stage1_success_metadata_path=self.config.stage1_success_metadata_path,
+                stage1_failure_metadata_path=self.config.stage1_failure_metadata_path,
+            )
+            if self.config.action_norm_stats_path
+            else None
+        )
         self._next_chunk_id = 0
         self._executed_steps = 0
         self._has_reset = False
@@ -149,21 +166,14 @@ class UR10eEnv(gym.Env):
         }
 
     def reset(self, *, seed=None, options=None):
-        """Wait for manual reset confirmation and read without commanding devices."""
+        """Read device state without commanding the robot."""
         super().reset(seed=seed)
         del options
-        if self.config.require_reset_confirmation:
-            expected = self.config.reset_confirmation_text.strip().lower()
-            response = input(
-                f"Manually reset UR10e, then type {self.config.reset_confirmation_text!r} "
-                "to start inference: "
-            )
-            if response.strip().lower() != expected:
-                raise KeyboardInterrupt("UR10e manual reset was cancelled.")
         observation = self._run(self._client.get_initial_observation())
         self._executed_steps = 0
         self._has_reset = True
-        return self._validate_observation(observation), {}
+        self._last_observation = self._validate_observation(observation)
+        return self._last_observation, {}
 
     def step(self, action):
         """Reject scalar stepping because this device consumes native chunks."""
@@ -171,29 +181,93 @@ class UR10eEnv(gym.Env):
         raise RuntimeError("UR10eEnv requires execute_action_chunk(), not step().")
 
     def execute_action_chunk(self, actions: np.ndarray):
-        """Submit one action chunk and return only its final observation."""
+        """Execute actor actions after converting to physical relative coordinates."""
         if not self._has_reset:
             raise RuntimeError("UR10eEnv must be reset before executing a chunk.")
         actions = np.asarray(actions, dtype=np.float32)
-        result = self._run(self._client.execute_chunk(actions, self._next_chunk_id))
+        if actions.shape != (15, 10) or not np.isfinite(actions).all():
+            raise ValueError("UR10e actor chunk must be finite [15,10]")
+        physical = (
+            self._action_space.denormalize(actions) if self._action_space else actions
+        )
+        try:
+            result = self._run(
+                self._client.execute_chunk(physical, self._next_chunk_id)
+            )
+        except Exception as exc:
+            self._has_reset = False
+            return self._invalid_abort(str(exc))
         self._next_chunk_id += 1
         # Partial consumption is valid: the external service owns the execution
         # horizon and returns after the number of policy steps it selected.
         self._executed_steps += result.executed_steps
-        truncated = (
-            result.truncated or self._executed_steps >= self.config.max_num_steps
-        )
+        outcome = result.outcome
+        rewards = result.rewards.copy()
+        terminations = result.terminations.copy()
+        truncations = result.truncations.copy()
+        reason = result.terminal_reason
+        if outcome == "RUNNING" and self._executed_steps >= self.config.max_num_steps:
+            outcome = "FAILURE"
+            reason = "time_limit"
+            rewards[result.executed_steps - 1] = -750.0
+            terminations[result.executed_steps - 1] = True
+        if outcome != "RUNNING":
+            self._has_reset = False
+        if result.observation is None:
+            if outcome == "RUNNING":
+                self._has_reset = False
+                return self._invalid_abort(
+                    "Nonterminal UR10e chunk has no final observation"
+                )
+            observation = self._last_observation
+            placeholder = True
+        else:
+            try:
+                observation = self._validate_observation(result.observation)
+                placeholder = False
+            except ValueError:
+                if outcome == "RUNNING":
+                    self._has_reset = False
+                    return self._invalid_abort(
+                        "Nonterminal UR10e observation is invalid"
+                    )
+                observation = self._last_observation
+                placeholder = True
+        self._last_observation = observation
         info = {
             "chunk_id": result.chunk_id,
             "executed_steps": result.executed_steps,
             "message": result.message,
+            "outcome": outcome,
+            "record_transition": result.record_transition
+            and outcome != "INVALID_ABORT",
+            "terminal_reason": reason,
+            "terminal_next_obs_placeholder": placeholder,
         }
         return (
-            self._validate_observation(result.observation),
-            0.0,
-            result.terminated,
-            truncated,
+            observation,
+            rewards,
+            terminations,
+            truncations,
             info,
+        )
+
+    def _invalid_abort(self, message: str):
+        """Retain a structural observation while forbidding episode replay."""
+        return (
+            self._last_observation,
+            np.zeros(15, dtype=np.float32),
+            np.zeros(15, dtype=np.bool_),
+            np.zeros(15, dtype=np.bool_),
+            {
+                "chunk_id": self._next_chunk_id,
+                "executed_steps": 0,
+                "message": message,
+                "outcome": "INVALID_ABORT",
+                "record_transition": False,
+                "terminal_reason": "device_error",
+                "terminal_next_obs_placeholder": True,
+            },
         )
 
     def close(self) -> None:

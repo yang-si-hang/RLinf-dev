@@ -144,6 +144,20 @@ class RealworldRLTRoute(RLTRoute):
         return RLTRouteOutput(actions=routed_actions, result=result)
 
 
+class UR10eActorOnlyRoute(RLTRoute):
+    """Keep the reference for BC while sending only actor actions to the robot."""
+
+    def route(self, ctx: RLTRouteContext) -> RLTRouteOutput:
+        actions = ctx.student_actions.contiguous()
+        forward_inputs = ctx.result["forward_inputs"]
+        forward_inputs["action"] = actions.reshape(actions.shape[0], -1).detach()
+        forward_inputs["record_transition"] = torch.ones(
+            (actions.shape[0], 1), device=actions.device, dtype=torch.bool
+        )
+        forward_inputs["actor_switch"] = forward_inputs["record_transition"]
+        return RLTRouteOutput(actions=actions, result=ctx.result)
+
+
 class SimulatorRLTRoute(RLTRoute):
     """Actor/ref/expert routing for ManiSkill RLT with schedule warmup."""
 
@@ -245,6 +259,10 @@ class SimulatorRLTRoute(RLTRoute):
 
 
 def build_rlt_route(cfg: Any) -> RLTRoute:
+    if bool(cfg.algorithm.get("ur10e_actor_only", False)):
+        if cfg.env.train.env_type != "realworld":
+            raise ValueError("ur10e_actor_only requires a realworld environment")
+        return UR10eActorOnlyRoute()
     if use_simulator_transition_replay(cfg):
         schedule_cfg = cfg.algorithm.get("rlt_schedule", {}) or {}
         return SimulatorRLTRoute(

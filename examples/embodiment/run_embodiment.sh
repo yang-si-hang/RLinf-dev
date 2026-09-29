@@ -33,7 +33,11 @@ else
 fi
 
 # NOTE: Set the active robot platform (required for correct action dimension and normalization), supported platforms are LIBERO, ALOHA, BRIDGE, default is LIBERO
-ROBOT_PLATFORM=${2:-${ROBOT_PLATFORM:-"LIBERO"}}
+DEFAULT_ROBOT_PLATFORM="LIBERO"
+if [ "$CONFIG_NAME" = "ur10e_rlt_stage2_td3_mlp" ]; then
+    DEFAULT_ROBOT_PLATFORM="UR10E"
+fi
+ROBOT_PLATFORM=${2:-${ROBOT_PLATFORM:-$DEFAULT_ROBOT_PLATFORM}}
 
 export ROBOT_PLATFORM
 

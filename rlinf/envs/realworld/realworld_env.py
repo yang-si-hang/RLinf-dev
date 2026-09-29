@@ -469,17 +469,46 @@ class RealWorldEnv(gym.Env):
             return np.expand_dims(value, axis=0)
 
         obs = self._wrap_obs(add_batch_dim(raw_obs))
-        rewards = torch.as_tensor([[reward]], dtype=torch.float32)
-        terminations = torch.as_tensor([[terminated]], dtype=torch.bool)
-        truncations = torch.as_tensor([[truncated]], dtype=torch.bool)
+        rewards = torch.as_tensor(
+            np.asarray(reward).reshape(1, -1), dtype=torch.float32
+        )
+        terminations = torch.as_tensor(
+            np.asarray(terminated).reshape(1, -1), dtype=torch.bool
+        )
+        truncations = torch.as_tensor(
+            np.asarray(truncated).reshape(1, -1), dtype=torch.bool
+        )
+        is_ur_chunk = "outcome" in info
+        if is_ur_chunk and any(
+            x.shape != (1, actions.shape[1])
+            for x in (rewards, terminations, truncations)
+        ):
+            raise ValueError(
+                "Native chunk result must preserve the full action horizon"
+            )
         vector_info = dict(info)
+        failure_current_chunk = np.asarray(
+            [info.get("outcome") == "FAILURE"], dtype=bool
+        )
+        if is_ur_chunk:
+            self.fail_once = self.fail_once | failure_current_chunk
         vector_info = self._record_metrics(
-            np.asarray([reward], dtype=np.float32),
-            np.asarray([terminated], dtype=bool),
-            np.asarray([np.isclose(reward, 1.0)], dtype=bool),
+            np.asarray([rewards.sum().item()], dtype=np.float32),
+            np.asarray([terminations.any().item()], dtype=bool),
+            np.asarray(
+                [
+                    info.get("outcome") == "SUCCESS"
+                    if is_ur_chunk
+                    else np.isclose(reward, 1.0)
+                ],
+                dtype=bool,
+            ),
             np.asarray([False], dtype=bool),
             vector_info,
         )
+        if is_ur_chunk:
+            vector_info["episode"]["failure_once"] = to_tensor(self.fail_once.copy())
+            vector_info["episode"]["failure_at_end"] = to_tensor(failure_current_chunk)
         return [obs], rewards, terminations, truncations, [vector_info]
 
     def _handle_auto_reset(self, dones, _final_obs, infos):
