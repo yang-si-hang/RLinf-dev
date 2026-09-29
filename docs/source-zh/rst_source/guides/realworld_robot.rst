@@ -304,3 +304,27 @@ YAML 配置
    bash examples/embodiment/run_realworld_async.sh realworld_dummy_franka_sac_cnn
 
 正式训练前可在控制节点验证相机、在 head 节点用 dummy 配置确认 Ray 与 placement 是否正确；完整检查项见 :doc:`../examples/embodied/franka`。
+
+
+UR10e 在线 TD3
+---------------
+
+单机械臂 UR10e 在线配置为
+``examples/embodiment/config/ur10e_rlt_stage2_td3_mlp.yaml``。先在机器人计算机的
+独立 VLA-Tele-ur 仓库启动设备服务，然后在 RLinf 计算机设置
+``UR10E_DEVICE_ENDPOINT`` 和 ``PROJECT_ROOT``，先预检再启动训练：
+
+.. code-block:: bash
+
+   PYTHONPATH=. python toolkits/standalone_eval_scripts/openpi/check_ur10e_online_td3.py
+   bash examples/embodiment/run_embodiment.sh ur10e_rlt_stage2_td3_mlp
+
+预检不发送动作。初始观测请求会重置设备端的 episode 状态，因此应在机器人静止时、
+正式训练前运行。未连接机器人时可用 ``--skip-device`` 只检查本地输入。
+
+每次物理复位完成后，须在 RLinf 主进程终端输入 ``start``；初始观测请求不会移动
+机器人。在机器人终端按 ``c`` 标记成功，按 ``b`` 标记任务失败或人工确认碰撞，
+按 ``x`` 丢弃中断的 episode。设备错误或网络超时会丢弃当前整个 episode。
+每轮最多执行 450 个已开始的 30 Hz 策略步；达到上限记为失败。从第一块起，
+只有 actor 动作控制机器人；冻结的 Stage 1 仅提供特征与 BC 参考。协议和设置详见
+``rlinf/envs/realworld/ur10e/README.md``。

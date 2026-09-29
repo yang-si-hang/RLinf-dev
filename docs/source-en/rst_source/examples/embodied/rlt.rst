@@ -11,9 +11,9 @@ stages:
 2. Freeze that feature model and train a lightweight off-policy actor-critic
    policy using the extracted RLT state.
 
-The checked-in examples target Franka peg insertion and the ManiSkill
-``PegInsertionSideWideClearance-v1`` joint-control simulation. The pipeline is
-not tied to either task. Reuse the same two-stage structure when the
+The checked-in examples target Franka peg insertion, ManiSkill
+``PegInsertionSideWideClearance-v1`` joint control, and UR10e cable insertion.
+Reuse the same two-stage structure when the
 demonstrations, environment config, action shape, state semantics, and OpenPI
 dataconfig stay aligned.
 
@@ -45,12 +45,31 @@ RLT separates representation learning from online RL control.
    .. grid-item-card:: Deployment
       :text-align: center
 
-      Franka real robot / ManiSkill simulation
+      Franka and UR10e robots / ManiSkill simulation
 
 | **You'll do:** prepare demonstrations -> train Stage 1 -> point Stage 2 at
   the Stage 1 checkpoint -> launch actor-critic training -> monitor replay-buffer and task
   success metrics.
-| **Prerequisites:** `OpenPI π₀.₅ base weights <https://huggingface.co/lerobot/pi05_base>`__, plus the environment for your example—either :doc:`Franka real-world <../embodied/franka>` or :doc:`ManiSkill simulation <../embodied/maniskill>`.
+| **Prerequisites:** `OpenPI π₀.₅ base weights <https://huggingface.co/lerobot/pi05_base>`__ and the environment for your selected recipe.
+
+Task Recipes
+~~~~~~~~~~~~
+
+Use a task recipe for exact inputs, commands, and checkpoints. The UR10e recipe
+covers actor-only online TD3; the Franka and ManiSkill commands remain below.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Task
+     - Recipe
+   * - UR10e cable insertion
+     - :doc:`UR10e RLT Stage 1 and online TD3 <rlt_ur10e>`
+
+.. toctree::
+   :hidden:
+
+   UR10e <rlt_ur10e>
 
 Provided Configuration Files
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -77,6 +96,9 @@ Provided Configuration Files
    * - ManiSkill Stage 2 (TD3)
      - ``examples/embodiment/config/maniskill_rlt_stage2_td3_mlp.yaml``
      - Run the simulated TD3-MLP variant with the same frozen Stage 1 feature model and replay route.
+   * - UR10e Stage 1 and online TD3
+     - :doc:`UR10e recipe <rlt_ur10e>`
+     - Train frozen-VLA RLT features, then run actor-only online TD3 with an imported offline critic.
 
 Installation
 ------------

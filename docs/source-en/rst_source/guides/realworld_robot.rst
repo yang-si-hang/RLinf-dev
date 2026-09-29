@@ -325,3 +325,31 @@ below (see :doc:`multi_node`, Step 3: Enable code sync).
    bash examples/embodiment/run_realworld_async.sh realworld_dummy_franka_sac_cnn
 
 Verify cameras on control nodes and Ray/placement on the head with the dummy config before full training; see :doc:`../examples/embodied/franka` for the full checklist.
+
+
+UR10e online TD3
+----------------
+
+The single-robot UR10e online configuration is
+``examples/embodiment/config/ur10e_rlt_stage2_td3_mlp.yaml``. Run the device
+server from the separate VLA-Tele-ur checkout on the robot computer, then set
+``UR10E_DEVICE_ENDPOINT`` and ``PROJECT_ROOT`` on the RLinf computer. Check
+inputs and device observations before launching training:
+
+.. code-block:: bash
+
+   PYTHONPATH=. python toolkits/standalone_eval_scripts/openpi/check_ur10e_online_td3.py
+   bash examples/embodiment/run_embodiment.sh ur10e_rlt_stage2_td3_mlp
+
+The preflight sends no action. Its initial-observation request resets the
+device-side episode state, so run it before training with the robot stationary.
+Use ``--skip-device`` to check local inputs without a connected robot.
+
+The RLinf main terminal requires ``start`` after every physical reset; its
+initial observation request does not move the robot. On the robot terminal,
+press ``c`` for success, ``b`` for failure or confirmed collision, or ``x`` to
+discard an interrupted episode. A device error or network timeout discards the
+whole current episode. The run limits each episode to 450 started 30 Hz policy
+steps; reaching the limit records a failure. The actor controls all action
+chunks, while frozen Stage 1 supplies features and BC reference actions. See
+``rlinf/envs/realworld/ur10e/README.md`` for protocol and setup details.

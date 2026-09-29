@@ -6,9 +6,9 @@ RL Token：借助视觉-语言-动作模型启动在线强化学习
 1. 在示范数据上联合训练 VLA 检查点和 RLT token transformer。
 2. 冻结第一阶段得到的特征模型，用提取出的 RLT 状态训练一个轻量级 off-policy actor-critic。
 
-当前仓库中的示例配置面向 Franka peg insertion 和 ManiSkill
-``PegInsertionSideWideClearance-v1`` joint-control 仿真。pipeline 本身不绑定
-具体任务；只要示范数据、环境配置、动作维度、状态语义和 OpenPI dataconfig 对齐，
+当前仓库中的示例配置面向 Franka peg insertion、ManiSkill
+``PegInsertionSideWideClearance-v1`` joint-control 仿真，以及 UR10e 网线插接。
+只要示范数据、环境配置、动作维度、状态语义和 OpenPI dataconfig 对齐，
 就可以复用相同的两阶段结构。
 
 官方项目页：`Precise Manipulation with Efficient Online RL <https://www.pi.website/research/rlt>`_。
@@ -39,10 +39,29 @@ RLT 将表示学习和在线 RL 控制拆开。
    .. grid-item-card:: 部署
       :text-align: center
 
-      Franka 真机 / ManiSkill 仿真
+      Franka 与 UR10e 真机 / ManiSkill 仿真
 
 | **你将完成：** 准备示范数据 -> 训练 Stage 1 -> 在 Stage 2 中加载 Stage 1 检查点 -> 启动 actor-critic 训练 -> 观察 replay buffer 与任务成功率指标。
-| **前置条件：** 准备好 `OpenPI π₀.₅ <https://huggingface.co/lerobot/pi05_base>`__ 基座模型，并按所选示例配置 :doc:`Franka 真机环境 <../embodied/franka>` 或 :doc:`ManiSkill 仿真环境 <../embodied/maniskill>` （二选一）。
+| **前置条件：** 准备好 `OpenPI π₀.₅ <https://huggingface.co/lerobot/pi05_base>`__ 基座模型及所选配方对应的运行环境。
+
+任务配方
+~~~~~~~~
+
+按任务配方查看具体输入、命令和 checkpoint。UR10e 配方说明 actor-only 在线 TD3；
+Franka 和 ManiSkill 命令仍在本页下方。
+
+.. list-table::
+   :header-rows: 1
+
+   * - 任务
+     - 配方
+   * - UR10e 网线插接
+     - :doc:`UR10e RLT Stage 1 与在线 TD3 <rlt_ur10e>`
+
+.. toctree::
+   :hidden:
+
+   UR10e <rlt_ur10e>
 
 提供的配置文件
 ~~~~~~~~~~~~~~
@@ -69,6 +88,9 @@ RLT 将表示学习和在线 RL 控制拆开。
    * - ManiSkill Stage 2（TD3）
      - ``examples/embodiment/config/maniskill_rlt_stage2_td3_mlp.yaml``
      - 使用相同的冻结 Stage 1 特征模型和 replay 路径运行仿真 TD3-MLP 变体。
+   * - UR10e Stage 1 与在线 TD3
+     - :doc:`UR10e 配方 <rlt_ur10e>`
+     - 训练冻结 VLA 的 RLT 特征，再导入离线 critic 运行 actor-only 在线 TD3。
 
 安装
 ----
